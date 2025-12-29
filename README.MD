@@ -6,7 +6,7 @@ Unlike generic RAG chatbots, this project is designed to **minimize hallucinatio
 - qualitative narrative analysis
 - deterministic numeric extraction from tables
 
----
+----
 
 ## 🔍 What Problem Does This Solve?
 
