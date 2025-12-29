@@ -58,16 +58,6 @@ Naive RAG systems fail by:
 
 ---
 
-## 🧪 Killer Demo Question
-
-> **“What themes does Amazon emphasize most strongly in its 2024 annual report, and what does that suggest about management’s priorities and concerns?”**
-
-This tests:
-- document-level synthesis
-- avoidance of hallucinated metrics
-- evidence-faithful reasoning
-
----
 
 ## 🚀 How to Run
 
