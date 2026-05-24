@@ -14,7 +14,7 @@ Dense + BM25 retrieval → RRF fusion → cross-encoder reranking → grounded g
 | Vector store | ChromaDB (local, persistent) |
 | Sparse retrieval | BM25Okapi |
 | Reranker | `BAAI/bge-reranker-v2-m3` |
-| LLM | Groq — Llama 3.3-70B (free tier) |
+| LLM | Groq — Llama 3.3-70B (free tier) **or** Ollama (fully local) |
 | Evaluation | RAGAS · NDCG@10 |
 
 **Cost: $0**
@@ -54,13 +54,34 @@ cd Financial-RAG-System
 uv sync
 ```
 
+### Option A — Groq (cloud, free tier)
+
 Create a `.env` file:
 
 ```env
 GROQ_API_KEY=your_key_here
+
+# Model selection — uncomment one (default: llama-3.3-70b-versatile)
+# GROQ_MODEL=llama-3.3-70b-versatile   # best quality — 100K tokens/day
+GROQ_MODEL=llama-3.1-8b-instant        # faster — 500K tokens/day, 20K TPM
 ```
 
 Free key at [console.groq.com](https://console.groq.com) — no credit card required.
+
+### Option B — Ollama (local, no limits)
+
+```bash
+brew install ollama        # macOS
+ollama serve               # start the server
+ollama pull llama3.1:8b    # default model (~5 GB)
+# ollama pull mistral:7b   # or any other model
+```
+
+No `.env` needed. Override the server URL if not running on localhost:
+
+```env
+OLLAMA_BASE_URL=http://localhost:11434
+```
 
 ---
 
@@ -69,7 +90,15 @@ Free key at [console.groq.com](https://console.groq.com) — no credit card requ
 **Ask a question (full RAG — retrieve + generate + cite)**
 
 ```bash
+# Groq (default)
 python main.py --dataset financebench --query "What was Apple's revenue in FY2022?"
+
+# Ollama
+python main.py --dataset financebench --query "What was Apple's revenue in FY2022?" --provider ollama
+
+# Specific model
+python main.py --dataset financebench --query "..." --provider ollama --model mistral:7b
+python main.py --dataset financebench --query "..." --provider groq --model llama-3.1-8b-instant
 ```
 
 **Retrieval benchmark — single dataset**
@@ -84,7 +113,7 @@ python main.py --dataset financebench
 python main.py --all
 ```
 
-**Without MultiQuery expansion (faster, no extra Groq calls)**
+**Without MultiQuery expansion (faster, no extra LLM calls)**
 
 ```bash
 python main.py --dataset financebench --no-multiquery
@@ -99,14 +128,20 @@ python main.py --dataset financebench --rebuild
 **RAGAS evaluation — faithfulness, answer relevancy, context utilization**
 
 ```bash
-# Baseline (no MultiQuery)
+# Baseline — Groq (no MultiQuery)
 python eval.py --dataset financebench --config baseline_k5 --n 20 --no-multiquery
 
 # With MultiQuery expansion
 python eval.py --dataset financebench --config multiquery_k5 --n 20
 
+# Ollama — local, no API limits
+python eval.py --dataset financebench --config ollama_baseline --n 20 --provider ollama
+
 # Compare configs + save chart
 python eval.py --compare --dataset financebench --chart results/ragas_comparison.png
+
+# Historical trend for one config
+python eval.py --trend --dataset financebench --config baseline_k5
 ```
 
 ---
@@ -122,6 +157,25 @@ python eval.py --compare --dataset financebench --chart results/ragas_comparison
 | MultiHiertt | 0.7763 |
 | ConvFinQA | 0.7587 |
 | FinDER | 0.7180 |
+
+---
+
+## RAGAS Results (FinanceBench)
+
+Reference-free evaluation across configs. Each metric ∈ [0, 1]; higher is better.
+
+| Config | Model | Faithful | Relevancy | Ctx Util |
+|---|---|---|---|---|
+| baseline (no MultiQuery) | groq/llama-3.3-70b-versatile | — | — | — |
+| multiquery_k5 | groq/llama-3.3-70b-versatile | — | — | — |
+| baseline (no MultiQuery) | ollama/llama3.1:8b | — | — | — |
+
+*Run `python eval.py --compare --dataset financebench` to populate this table after completing evaluations with n≥20.*
+
+**Metric definitions:**
+- **Faithfulness** — fraction of answer claims directly supported by retrieved context (hallucination detector)
+- **Answer Relevancy** — cosine similarity of back-generated questions to the original query
+- **Context Utilization** — whether the retrieved context was actually used to form the answer
 
 ---
 
