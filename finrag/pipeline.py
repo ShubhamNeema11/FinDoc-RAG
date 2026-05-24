@@ -26,7 +26,14 @@ from .config import DATASET_CONFIGS, DATASET_DIR, DatasetConfig
 from .data import load_jsonl, load_qrels, make_corpus_lookup
 from .evaluation import compute_ndcg
 from .generation import GenerationResult, generate_answer
-from .models import empty_cache, get_embedding_model, get_llm, get_reranker
+from .models import (
+    GROQ_DEFAULT_MODEL,
+    OLLAMA_DEFAULT_MODEL,
+    empty_cache,
+    get_embedding_model,
+    get_provider_llm,
+    get_reranker,
+)
 from .retrieval import build_bm25_okapi, build_bm25_retriever, retrieve_and_rerank
 from .vectorstore import get_vectorstore
 
@@ -52,6 +59,8 @@ def run_dataset(
     use_multiquery: bool = True,
     force_rebuild: bool = False,
     top_k: int = 10,
+    provider: str = "groq",
+    model: str | None = None,
 ) -> DatasetResult:
     """
     Run the full retrieval pipeline on a single dataset.
@@ -100,7 +109,7 @@ def run_dataset(
     # ── Models (lazy singletons — loaded once, shared across datasets) ─────
     embedding_model = get_embedding_model()
     reranker        = get_reranker()
-    llm             = get_llm() if use_multiquery else None
+    llm             = get_provider_llm(provider, model) if use_multiquery else None
 
     # ── Vector store ───────────────────────────────────────────────────────
     vectorstore = get_vectorstore(
@@ -171,6 +180,9 @@ def run_dataset(
 
 def run_all(
     datasets: Optional[list[str]] = None,
+    *,
+    provider: str = "groq",
+    model: str | None = None,
     **kwargs,
 ) -> dict[str, DatasetResult]:
     """
@@ -185,7 +197,7 @@ def run_all(
     all_results: dict[str, DatasetResult] = {}
 
     for name in names:
-        all_results[name] = run_dataset(name, **kwargs)
+        all_results[name] = run_dataset(name, provider=provider, model=model, **kwargs)
 
     # ── Summary table ──────────────────────────────────────────────────────
     logger.info("")
@@ -206,12 +218,14 @@ def run_all(
 # ── Interactive single-query RAG ──────────────────────────────────────────────
 
 def run_rag_query(
-    query:         str,
-    dataset_name:  str  = "financebench",
+    query:          str,
+    dataset_name:   str  = "financebench",
     *,
-    top_k:         int  = 5,
+    top_k:          int  = 5,
     use_multiquery: bool = True,
-    force_rebuild: bool = False,
+    force_rebuild:  bool = False,
+    provider:       str  = "groq",
+    model:          str | None = None,
 ) -> GenerationResult:
     """
     Full RAG for a single query: retrieve → generate → cite.
@@ -224,12 +238,14 @@ def run_rag_query(
     query          : natural language financial question
     dataset_name   : which corpus to search (default: "financebench")
     top_k          : docs to retrieve and pass to the LLM (default: 5)
-    use_multiquery : use LLM query expansion if GROQ_API_KEY is set
+    use_multiquery : use LLM query expansion (requires LLM to be available)
     force_rebuild  : rebuild ChromaDB index even if cache exists
+    provider       : "groq" (cloud) or "ollama" (local)
+    model          : model name override — defaults per provider apply if None
 
     Returns
     -------
-    GenerationResult with .answer (str) and .sources (list[CitedSource])
+    GenerationResult with .answer (str), .sources (list[CitedSource]), .model (str)
 
     Example
     -------
@@ -253,7 +269,16 @@ def run_rag_query(
     chunks          = split_documents(corpus, cfg.chunk_size, cfg.chunk_overlap, cfg.dataset_type)
     embedding_model = get_embedding_model()
     reranker        = get_reranker()
-    llm             = get_llm() if use_multiquery else None
+    gen_llm         = get_provider_llm(provider, model)
+
+    if gen_llm is None:
+        raise RuntimeError(
+            "LLM unavailable — for Groq: set GROQ_API_KEY in .env; "
+            "for Ollama: run `ollama serve` and `ollama pull <model>`."
+        )
+
+    # MultiQuery uses the same LLM as generation (avoids loading two models)
+    retrieval_llm = gen_llm if use_multiquery else None
 
     # ── Vector store + BM25 (vector store cached on disk) ─────────────────
     vectorstore    = get_vectorstore(cfg.name, chunks, embedding_model, force_rebuild=force_rebuild)
@@ -270,20 +295,15 @@ def run_rag_query(
         reranker=reranker,
         dataset_type=cfg.dataset_type,
         fetch_k=cfg.fetch_k,
-        llm=llm,
+        llm=retrieval_llm,
         k=top_k,
         rerank_top_n=cfg.rerank_top_n,
     )
 
-    used_multiquery = llm is not None
-
     # ── Generate ───────────────────────────────────────────────────────────
-    gen_llm = get_llm()   # always use LLM for generation (separate from retrieval)
-    if gen_llm is None:
-        raise RuntimeError(
-            "GROQ_API_KEY not set — generation requires an LLM. "
-            "Add it to .env and retry."
-        )
+    actual_model = model or (
+        OLLAMA_DEFAULT_MODEL if provider == "ollama" else GROQ_DEFAULT_MODEL
+    )
 
     return generate_answer(
         query=query,
@@ -291,5 +311,6 @@ def run_rag_query(
         corpus_lookup=corpus_lookup,
         llm=gen_llm,
         top_k=top_k,
-        multiquery=used_multiquery,
+        multiquery=retrieval_llm is not None,
+        model_name=actual_model,
     )

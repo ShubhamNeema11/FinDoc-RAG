@@ -38,7 +38,7 @@ _METRICS = ["faithfulness", "answer_relevancy", "context_utilization"]
 _COLORS  = {"faithfulness": "#4C72B0", "answer_relevancy": "#DD8452", "context_utilization": "#55A868"}
 
 _CSV_COLS = [
-    "timestamp", "dataset", "config_name", "n_samples",
+    "timestamp", "dataset", "config_name", "model", "n_samples",
     "faithfulness", "answer_relevancy", "context_utilization",
 ]
 
@@ -68,6 +68,7 @@ class RegressionTracker:
             "timestamp":            datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "dataset":              result.dataset,
             "config_name":          result.config_name,
+            "model":                result.model,
             "n_samples":            result.n_samples,
             "faithfulness":         round(result.faithfulness, 6),
             "answer_relevancy":     round(result.answer_relevancy, 6),
@@ -75,9 +76,9 @@ class RegressionTracker:
         }
         pd.DataFrame([row]).to_csv(self.csv_path, mode="a", header=False, index=False)
         logger.info(
-            "Regression row appended  |  dataset=%s  config=%s  "
+            "Regression row appended  |  dataset=%s  config=%s  model=%s  "
             "faith=%.4f  rel=%.4f  util=%.4f",
-            result.dataset, result.config_name,
+            result.dataset, result.config_name, result.model,
             result.faithfulness, result.answer_relevancy, result.context_utilization,
         )
 
@@ -134,7 +135,7 @@ class RegressionTracker:
         )
 
         # ── Console table ────────────────────────────────────────────────────
-        header = f"{'Config':<22}  {'Faithful':>10}  {'Relevancy':>10}  {'Ctx Util':>10}  {'N':>5}"
+        header = f"{'Config':<22}  {'Model':<34}  {'Faithful':>10}  {'Relevancy':>10}  {'Ctx Util':>10}  {'N':>5}"
         sep    = "─" * len(header)
         print(f"\n{sep}")
         print(f"  RAGAS Comparison  |  dataset={dataset}")
@@ -142,8 +143,9 @@ class RegressionTracker:
         print(f"  {header}")
         print(f"  {sep}")
         for cfg, row in df.iterrows():
+            model_str = str(row.get("model", "unknown"))
             print(
-                f"  {cfg:<22}  {row['faithfulness']:>10.4f}  "
+                f"  {cfg:<22}  {model_str:<34}  {row['faithfulness']:>10.4f}  "
                 f"{row['answer_relevancy']:>10.4f}  "
                 f"{row['context_utilization']:>10.4f}  "
                 f"{int(row['n_samples']):>5}"

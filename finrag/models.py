@@ -3,6 +3,15 @@ Model singletons — embedding model, cross-encoder reranker, and LLM.
 
 All models are loaded lazily on first access and cached for reuse across
 datasets. Device detection prioritises: CUDA → MPS (Apple Silicon) → CPU.
+
+LLM providers
+-------------
+groq   : Groq cloud API — llama-3.3-70b-versatile (free tier, 100 K tokens/day)
+ollama : Local Ollama server — llama3.1:8b default (no limits, no internet)
+
+Use get_provider_llm(provider, model) anywhere in the pipeline without caring
+which backend is active.  get_provider_eval_llm() gives a judge-suitable variant
+(rate-limited for Groq, larger context budget for both).
 """
 
 import logging
@@ -12,6 +21,14 @@ from typing import Optional
 import torch
 
 logger = logging.getLogger(__name__)
+
+# ── Default model names per provider ─────────────────────────────────────────
+# GROQ_MODEL env var lets you switch models via .env without touching code:
+#   GROQ_MODEL=llama-3.3-70b-versatile   ← best quality
+#   GROQ_MODEL=llama-3.1-8b-instant      ← faster, higher TPM limit
+GROQ_DEFAULT_MODEL   = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+OLLAMA_DEFAULT_MODEL = "llama3.1:8b"
+
 
 # ── Device detection ─────────────────────────────────────────────────────────
 
@@ -36,7 +53,7 @@ def empty_cache() -> None:
 # ── Lazy singletons ───────────────────────────────────────────────────────────
 _embedding_model = None
 _reranker        = None
-_llm             = None
+_llm             = None   # Groq singleton only
 
 
 def get_embedding_model():
@@ -79,10 +96,12 @@ def get_reranker():
     return _reranker
 
 
+# ── Groq (cloud) ──────────────────────────────────────────────────────────────
+
 def get_llm() -> Optional[object]:
     """
-    Load Groq LLM for MultiQueryRetriever (requires GROQ_API_KEY in .env).
-    Returns None if the key is absent — pipeline continues without MultiQuery.
+    Load Groq LLM (default model, singleton).
+    Returns None if GROQ_API_KEY is absent — pipeline continues without MultiQuery.
     """
     global _llm
     if _llm is None:
@@ -96,9 +115,9 @@ def get_llm() -> Optional[object]:
 
         from langchain_groq import ChatGroq
 
-        logger.info("Loading Groq LLM (llama-3.3-70b-versatile) …")
+        logger.info("Loading Groq LLM (%s) …", GROQ_DEFAULT_MODEL)
         _llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
+            model=GROQ_DEFAULT_MODEL,
             temperature=0,
             max_tokens=256,
         )
@@ -110,16 +129,14 @@ def get_eval_llm() -> Optional[object]:
     """
     Rate-limited Groq LLM for RAGAS evaluation (judge calls).
 
-    RAGAS issues one LLM call per metric per sample — with 20 samples × 3
-    metrics = 60 calls.  Groq free tier allows 30 req/min, so we cap at
-    0.4 req/s (24/min) leaving headroom for MultiQuery calls running
-    concurrently.
+    RAGAS issues one LLM call per metric per sample — 20 samples × 3 metrics
+    = 60 calls.  Groq free tier allows 30 req/min, so we cap at 0.4 req/s.
 
     Returns None if GROQ_API_KEY is absent.
     """
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
-        logger.warning("GROQ_API_KEY not set — RAGAS evaluation requires Groq.")
+        logger.warning("GROQ_API_KEY not set — RAGAS evaluation requires an LLM.")
         return None
 
     from langchain_core.rate_limiters import InMemoryRateLimiter
@@ -131,12 +148,99 @@ def get_eval_llm() -> Optional[object]:
         max_bucket_size=5,
     )
 
-    logger.info(
-        "Loading rate-limited Groq eval LLM (0.4 req/s — ~5-8 min for 20 samples) …"
-    )
+    logger.info("Loading rate-limited Groq eval LLM (0.4 req/s) …")
     return ChatGroq(
-        model="llama-3.3-70b-versatile",
+        model=GROQ_DEFAULT_MODEL,
         temperature=0,
-        max_tokens=1024,           # larger budget for judge reasoning
+        max_tokens=1024,
         rate_limiter=rate_limiter,
     )
+
+
+# ── Ollama (local) ────────────────────────────────────────────────────────────
+
+def get_ollama_llm(model_name: str = OLLAMA_DEFAULT_MODEL) -> object:
+    """
+    Load a local Ollama LLM.
+
+    Requires Ollama to be running:
+        ollama serve
+        ollama pull llama3.1:8b   # or any other model
+
+    OLLAMA_BASE_URL env var overrides the default http://localhost:11434.
+    No singleton — ChatOllama is cheap to construct (no network call until
+    the first .invoke()).
+    """
+    from langchain_ollama import ChatOllama
+
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    logger.info("Loading Ollama LLM (%s) @ %s …", model_name, base_url)
+    return ChatOllama(
+        model=model_name,
+        temperature=0,
+        num_predict=256,   # ChatOllama uses num_predict, not max_tokens
+        base_url=base_url,
+    )
+
+
+# ── Unified provider dispatchers ──────────────────────────────────────────────
+
+def get_provider_llm(
+    provider: str = "groq",
+    model: str | None = None,
+) -> Optional[object]:
+    """
+    Return the right LLM for the given provider.
+
+    Parameters
+    ----------
+    provider : "groq" | "ollama"
+    model    : override the default model name for the chosen provider.
+               Defaults: groq=llama-3.3-70b-versatile, ollama=llama3.1:8b
+
+    Returns None only for Groq when GROQ_API_KEY is absent.
+    """
+    if provider == "ollama":
+        return get_ollama_llm(model or OLLAMA_DEFAULT_MODEL)
+
+    if provider == "groq":
+        if model and model != GROQ_DEFAULT_MODEL:
+            # Non-default model — bypass singleton, create a fresh instance
+            api_key = os.getenv("GROQ_API_KEY")
+            if not api_key:
+                logger.warning("GROQ_API_KEY not set — Groq LLM disabled.")
+                return None
+            from langchain_groq import ChatGroq
+            logger.info("Loading Groq LLM (%s) …", model)
+            return ChatGroq(model=model, temperature=0, max_tokens=256)
+        return get_llm()   # default model — use singleton
+
+    raise ValueError(f"Unknown provider '{provider}'. Choose 'groq' or 'ollama'.")
+
+
+def get_provider_eval_llm(
+    provider: str = "groq",
+    model: str | None = None,
+) -> Optional[object]:
+    """
+    Return a judge-quality LLM for RAGAS evaluation.
+
+    Groq  : rate-limited at 0.4 req/s, max_tokens=1024
+    Ollama: no rate limiting needed, num_predict=1024
+    """
+    if provider == "ollama":
+        from langchain_ollama import ChatOllama
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        m = model or OLLAMA_DEFAULT_MODEL
+        logger.info("Loading Ollama eval LLM (%s) — no rate limiting …", m)
+        return ChatOllama(
+            model=m,
+            temperature=0,
+            num_predict=1024,
+            base_url=base_url,
+        )
+
+    if provider == "groq":
+        return get_eval_llm()   # rate-limited Groq path
+
+    raise ValueError(f"Unknown provider '{provider}'. Choose 'groq' or 'ollama'.")

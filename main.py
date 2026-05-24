@@ -80,7 +80,25 @@ def parse_args() -> argparse.Namespace:
         "--no-multiquery",
         action="store_true",
         default=False,
-        help="Disable MultiQuery LLM expansion (faster, no extra Groq calls).",
+        help="Disable MultiQuery LLM expansion (faster, no extra LLM calls).",
+    )
+    parser.add_argument(
+        "--provider",
+        choices=["groq", "ollama"],
+        default="groq",
+        metavar="PROVIDER",
+        help="LLM provider: 'groq' (cloud, default) or 'ollama' (local).",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        metavar="MODEL",
+        help=(
+            "Model name override. "
+            "Defaults: groq=llama-3.3-70b-versatile, ollama=llama3.1:8b. "
+            "Example: --provider ollama --model mistral:7b"
+        ),
     )
 
     # ── Output ─────────────────────────────────────────────────────────────
@@ -126,8 +144,9 @@ def main() -> None:
 
         top_k = args.top_k if args.top_k != 10 else 5   # sensible default for RAG
 
-        print(f"\nDataset : {args.dataset}")
-        print(f"Query   : {args.query}\n")
+        print(f"\nDataset  : {args.dataset}")
+        print(f"Provider : {args.provider}" + (f"  model={args.model}" if args.model else ""))
+        print(f"Query    : {args.query}\n")
 
         result = run_rag_query(
             query=args.query,
@@ -135,6 +154,8 @@ def main() -> None:
             top_k=top_k,
             use_multiquery=use_multiquery,
             force_rebuild=args.rebuild,
+            provider=args.provider,
+            model=args.model,
         )
         print(result.pretty())
         return
@@ -147,6 +168,8 @@ def main() -> None:
             use_multiquery=use_multiquery,
             force_rebuild=args.rebuild,
             top_k=args.top_k,
+            provider=args.provider,
+            model=args.model,
         )
         if args.save_results:
             _save_json(
@@ -159,6 +182,8 @@ def main() -> None:
             use_multiquery=use_multiquery,
             force_rebuild=args.rebuild,
             top_k=args.top_k,
+            provider=args.provider,
+            model=args.model,
         )
         ndcg_str = f"{result.ndcg:.4f}" if result.ndcg == result.ndcg else "N/A"
         print(f"\n{'='*44}")

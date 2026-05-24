@@ -4,17 +4,17 @@ Generation layer — grounded answer synthesis with source citation.
 Pipeline
 --------
 1. Format top-k retrieved docs as numbered context blocks
-2. Invoke Groq LLM (llama-3.3-70b-versatile) with a financial-analyst prompt
+2. Invoke the LLM (Groq or Ollama) with a financial-analyst prompt
 3. Parse structured output: answer text + list of cited doc IDs
 4. Return GenerationResult with full citation metadata
 
 Structured output uses Pydantic + LangChain's .with_structured_output(),
-with a plain-text fallback if JSON mode fails.
+with a plain-text fallback if JSON mode fails (common with smaller Ollama models).
 """
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
@@ -76,8 +76,8 @@ class GenerationResult:
     query:       str
     answer:      str
     sources:     list[CitedSource]
-    model:       str  = "llama-3.3-70b-versatile"
-    multiquery:  bool = False  # whether MultiQuery was used for retrieval
+    model:       str  = "unknown"   # set at call time from the actual LLM used
+    multiquery:  bool = False        # whether MultiQuery was used for retrieval
 
     def pretty(self) -> str:
         """Human-readable string for CLI / notebook display."""
@@ -159,6 +159,7 @@ def generate_answer(
     top_k:          int  = 5,
     max_chars:      int  = 1_500,
     multiquery:     bool = False,
+    model_name:     str  = "unknown",
 ) -> GenerationResult:
     """
     Synthesise a grounded answer from retrieved documents.
@@ -182,6 +183,7 @@ def generate_answer(
             query=query,
             answer="No relevant documents were retrieved for this query.",
             sources=[],
+            model=model_name,
             multiquery=multiquery,
         )
 
@@ -194,6 +196,7 @@ def generate_answer(
             query=query,
             answer="Retrieved documents could not be loaded from corpus.",
             sources=[],
+            model=model_name,
             multiquery=multiquery,
         )
 
@@ -229,6 +232,7 @@ def generate_answer(
             query=query,
             answer=result.answer,
             sources=cited_sources,
+            model=model_name,
             multiquery=multiquery,
         )
 
@@ -243,7 +247,6 @@ def generate_answer(
         response = chain.invoke({"context": context, "query": query})
         answer   = response.content
 
-        # Try to extract citation IDs from the answer text
         cited_set     = set(_extract_ids_from_text(answer, valid_ids))
         cited_sources = (
             [s for s in sources if s.corpus_id in cited_set]
@@ -254,6 +257,7 @@ def generate_answer(
             query=query,
             answer=answer,
             sources=cited_sources,
+            model=model_name,
             multiquery=multiquery,
         )
 
@@ -263,5 +267,6 @@ def generate_answer(
             query=query,
             answer=f"Generation error: {exc}",
             sources=sources,
+            model=model_name,
             multiquery=multiquery,
         )

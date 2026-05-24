@@ -56,6 +56,7 @@ class RAGASResult:
     """Aggregate RAGAS scores for one evaluation run."""
     dataset:               str
     config_name:           str
+    model:                 str       # "provider/model-name" e.g. "groq/llama-3.3-70b-versatile"
     n_samples:             int
     faithfulness:          float    # [0,1]  fraction of claims grounded in context
     answer_relevancy:      float    # [0,1]  cosine similarity of back-questions → query
@@ -67,6 +68,7 @@ class RAGASResult:
             f"{'─'*52}",
             f"  Dataset               : {self.dataset}",
             f"  Config                : {self.config_name}",
+            f"  Model                 : {self.model}",
             f"  Samples               : {self.n_samples}",
             f"{'─'*52}",
             f"  Faithfulness          : {self.faithfulness:.4f}",
@@ -178,6 +180,7 @@ def run_ragas_eval(
     *,
     dataset_name:   str = "financebench",
     config_name:    str = "baseline",
+    model_name:     str = "unknown",   # "provider/model" — shown in summary + CSV
     n_samples:      int = 20,
     sample_seed:    int = 42,
 ) -> RAGASResult:
@@ -231,18 +234,27 @@ def run_ragas_eval(
         corpus_lookup=corpus_lookup,
     )
 
-    # Wire metrics to Groq
+    # Wire metrics to judge LLM
     faithfulness_m, answer_relevancy_m, context_utilization_m = build_ragas_metrics(llm)
 
-    # Run — ragas calls the judge LLM internally; rate limiter on the llm handles pacing
     logger.info(
-        "Calling ragas.evaluate()  (Groq rate-limited at 0.4 req/s — "
-        "expect ~5-8 min for %d samples) …",
-        len(eval_dataset.samples),
+        "Calling ragas.evaluate()  model=%s  samples=%d …",
+        model_name, len(eval_dataset.samples),
     )
+
+    # RunConfig increases per-job timeout (default 60 s is too short when the
+    # rate limiter queues 24 concurrent RAGAS jobs behind Groq's 30 req/min cap)
+    from ragas import RunConfig
+    run_cfg = RunConfig(
+        timeout=600,       # seconds per async job (rate limiting)
+        max_retries=5,     # ragas-level retries before marking a job as failed
+        max_wait=120,      # max backoff wait between retries
+    )
+
     result = evaluate(
         dataset=eval_dataset,
         metrics=[faithfulness_m, answer_relevancy_m, context_utilization_m],
+        run_config=run_cfg,
     )
 
     df = result.to_pandas()
@@ -258,6 +270,7 @@ def run_ragas_eval(
     return RAGASResult(
         dataset=dataset_name,
         config_name=config_name,
+        model=model_name,
         n_samples=len(df),
         faithfulness=float(df["faithfulness"].mean()),
         answer_relevancy=float(df["answer_relevancy"].mean()),

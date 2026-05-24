@@ -77,9 +77,26 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--top-k", type=int, default=5, metavar="K",
                    help="Docs retrieved per query (default: 5)")
     p.add_argument("--no-multiquery", action="store_true", default=False,
-                   help="Disable LLM query expansion (faster, no extra Groq calls)")
+                   help="Disable LLM query expansion (faster, no extra LLM calls)")
     p.add_argument("--rebuild", action="store_true", default=False,
                    help="Force re-embed corpus even if ChromaDB cache exists")
+    p.add_argument(
+        "--provider",
+        choices=["groq", "ollama"],
+        default="groq",
+        help="LLM provider for generation and RAGAS judge (default: groq)",
+    )
+    p.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        metavar="MODEL",
+        help=(
+            "Model name override. "
+            "Defaults: groq=llama-3.3-70b-versatile, ollama=llama3.1:8b. "
+            "Example: --provider ollama --model mistral:7b"
+        ),
+    )
 
     # ── Reporting ─────────────────────────────────────────────────────────
     p.add_argument("--chart", type=Path, default=None, metavar="PATH",
@@ -141,7 +158,15 @@ def main() -> None:
     from finrag.config import DATASET_CONFIGS
     from finrag.data import load_jsonl, load_qrels, make_corpus_lookup
     from finrag.chunking import split_documents
-    from finrag.models import empty_cache, get_embedding_model, get_eval_llm, get_llm, get_reranker
+    from finrag.models import (
+        GROQ_DEFAULT_MODEL,
+        OLLAMA_DEFAULT_MODEL,
+        empty_cache,
+        get_embedding_model,
+        get_provider_eval_llm,
+        get_provider_llm,
+        get_reranker,
+    )
     from finrag.retrieval import build_bm25_okapi, build_bm25_retriever, retrieve_and_rerank
     from finrag.vectorstore import get_vectorstore
     from finrag.generation import generate_answer
@@ -168,16 +193,38 @@ def main() -> None:
     chunks          = split_documents(corpus, cfg.chunk_size, cfg.chunk_overlap, cfg.dataset_type)
     embedding_model = get_embedding_model()
     reranker        = get_reranker()
-    llm             = get_llm() if use_multiquery else None
+
+    gen_llm = get_provider_llm(args.provider, args.model)
+    if gen_llm is None:
+        logger.error(
+            "LLM unavailable — for Groq: set GROQ_API_KEY in .env; "
+            "for Ollama: run `ollama serve` and `ollama pull <model>`."
+        )
+        sys.exit(1)
+
+    eval_llm = get_provider_eval_llm(args.provider, args.model)
+    if eval_llm is None:
+        logger.error("RAGAS judge LLM unavailable.")
+        sys.exit(1)
+
+    # MultiQuery reuses gen_llm — avoids loading two separate models
+    retrieval_llm = gen_llm if use_multiquery else None
+
+    actual_model = args.model or (
+        OLLAMA_DEFAULT_MODEL if args.provider == "ollama" else GROQ_DEFAULT_MODEL
+    )
+
+    logger.info(
+        "Provider: %s  |  model: %s  |  multiquery: %s",
+        args.provider, actual_model, use_multiquery,
+    )
 
     vectorstore    = get_vectorstore(cfg.name, chunks, embedding_model,
                                      force_rebuild=args.rebuild)
     bm25_retriever = build_bm25_retriever(chunks.lc_docs, fetch_k=cfg.fetch_k)
     bm25_okapi     = build_bm25_okapi(chunks.texts)
 
-    # ── Retrieve + generate for all queries (build maps) ──────────────────
-    # We evaluate only a random sample, but we need the maps populated first.
-    # Strategy: sample queries upfront, retrieve + generate only those N.
+    # ── Sample queries ─────────────────────────────────────────────────────
     import random
     random.seed(args.seed)
 
@@ -188,26 +235,10 @@ def main() -> None:
         else eligible
     )
 
-    logger.info(
-        "Retrieving + generating for %d sampled queries …", len(sample)
-    )
+    logger.info("Retrieving + generating for %d sampled queries …", len(sample))
 
     retrieved_map: dict[str, list[tuple[str, float]]] = {}
     answers_map:   dict[str, str]                     = {}
-
-    # Unthrottled LLM for generation; rate-limited LLM for RAGAS judge calls
-    gen_llm = get_llm()
-    if gen_llm is None:
-        logger.error(
-            "GROQ_API_KEY not set — generation requires an LLM. "
-            "Add it to .env and retry."
-        )
-        sys.exit(1)
-
-    eval_llm = get_eval_llm()
-    if eval_llm is None:
-        logger.error("GROQ_API_KEY not set — RAGAS evaluation requires an LLM.")
-        sys.exit(1)
 
     from tqdm import tqdm
 
@@ -223,7 +254,7 @@ def main() -> None:
                 reranker=reranker,
                 dataset_type=cfg.dataset_type,
                 fetch_k=cfg.fetch_k,
-                llm=llm,
+                llm=retrieval_llm,
                 k=args.top_k,
                 rerank_top_n=cfg.rerank_top_n,
             )
@@ -235,7 +266,8 @@ def main() -> None:
                 corpus_lookup=corpus_lookup,
                 llm=gen_llm,
                 top_k=args.top_k,
-                multiquery=use_multiquery,
+                multiquery=retrieval_llm is not None,
+                model_name=actual_model,
             )
             answers_map[qid] = gen_result.answer
 
@@ -253,9 +285,10 @@ def main() -> None:
         retrieved_map=retrieved_map,
         answers_map=answers_map,
         corpus_lookup=corpus_lookup,
-        llm=eval_llm,      # rate-limited judge LLM — 0.4 req/s
+        llm=eval_llm,
         dataset_name=args.dataset,
         config_name=args.config,
+        model_name=f"{args.provider}/{actual_model}",  # e.g. "groq/llama-3.3-70b-versatile"
         n_samples=args.n,
         sample_seed=args.seed,
     )
