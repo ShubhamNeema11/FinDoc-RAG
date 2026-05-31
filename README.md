@@ -170,6 +170,7 @@ Reference-free evaluation across configs. Each metric ∈ [0, 1]; higher is bett
 | multiquery_k5 | groq/llama-3.3-70b-versatile | 87% | 92% | 76% |
 | baseline (no MultiQuery) | ollama/llama3.1:8b | 76% | 84% | 66% |
 | multiquery_k5 | ollama/llama3.1:8b | 79% | 89% | 69% |
+
 *Run `python eval.py --compare --dataset financebench` to populate this table after completing evaluations with n≥20.*
 
 **Metric definitions:**
