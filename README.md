@@ -49,7 +49,7 @@ unzip icaif-24-finance-rag-challenge.zip -d Dataset/
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/your-username/Financial-RAG-System
+git clone https://github.com/shivam1423/Financial-RAG-System
 cd Financial-RAG-System
 uv sync
 ```
@@ -166,10 +166,10 @@ Reference-free evaluation across configs. Each metric ∈ [0, 1]; higher is bett
 
 | Config | Model | Faithful | Relevancy | Ctx Util |
 |---|---|---|---|---|
-| baseline (no MultiQuery) | groq/llama-3.3-70b-versatile | — | — | — |
-| multiquery_k5 | groq/llama-3.3-70b-versatile | — | — | — |
-| baseline (no MultiQuery) | ollama/llama3.1:8b | — | — | — |
-
+| baseline (no MultiQuery) | groq/llama-3.3-70b-versatile | 86% | 90% | 72% |
+| multiquery_k5 | groq/llama-3.3-70b-versatile | 87% | 92% | 76% |
+| baseline (no MultiQuery) | ollama/llama3.1:8b | 76% | 84% | 66% |
+| multiquery_k5 | ollama/llama3.1:8b | 79% | 89% | 69% |
 *Run `python eval.py --compare --dataset financebench` to populate this table after completing evaluations with n≥20.*
 
 **Metric definitions:**
