@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # GROQ_MODEL env var lets you switch models via .env without touching code:
 #   GROQ_MODEL=llama-3.3-70b-versatile   ← best quality
 #   GROQ_MODEL=llama-3.1-8b-instant      ← faster, higher TPM limit
-GROQ_DEFAULT_MODEL   = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_DEFAULT_MODEL   = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 OLLAMA_DEFAULT_MODEL = "llama3.1:8b"
 
 
@@ -119,7 +119,7 @@ def get_llm() -> Optional[object]:
         _llm = ChatGroq(
             model=GROQ_DEFAULT_MODEL,
             temperature=0,
-            max_tokens=256,
+            max_tokens=1024,
         )
         logger.info("LLM ready.")
     return _llm
@@ -212,7 +212,7 @@ def get_provider_llm(
                 return None
             from langchain_groq import ChatGroq
             logger.info("Loading Groq LLM (%s) …", model)
-            return ChatGroq(model=model, temperature=0, max_tokens=256)
+            return ChatGroq(model=model, temperature=0, max_tokens=1024)
         return get_llm()   # default model — use singleton
 
     raise ValueError(f"Unknown provider '{provider}'. Choose 'groq' or 'ollama'.")

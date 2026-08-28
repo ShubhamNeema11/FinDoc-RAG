@@ -30,6 +30,12 @@ import logging
 import sys
 from pathlib import Path
 
+# Windows terminals default to cp1252, which can't encode the arrows/box-
+# drawing characters used in log messages and result output — force utf-8.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from finrag.config import DATASET_CONFIGS
 
 
