@@ -314,3 +314,72 @@ def run_rag_query(
         multiquery=retrieval_llm is not None,
         model_name=actual_model,
     )
+
+
+# ── RAG over an ad-hoc uploaded document ──────────────────────────────────────
+
+def run_rag_query_on_upload(
+    query:          str,
+    session_id:     str,
+    corpus_lookup:  dict,
+    chunk_result,
+    *,
+    top_k:          int  = 5,
+    use_multiquery: bool = False,
+    provider:       str  = "groq",
+    model:          str | None = None,
+) -> GenerationResult:
+    """
+    Full RAG for a single query against a document the user uploaded this
+    session (already ingested via finrag.ingestion.ingest_document).
+
+    MultiQuery defaults to off here — uploads are interactive (Streamlit),
+    and each extra query variant costs a network round-trip to Qdrant plus
+    an LLM call, which adds up fast in a UI.
+    """
+    embedding_model = get_embedding_model()
+    reranker        = get_reranker()
+    gen_llm         = get_provider_llm(provider, model)
+
+    if gen_llm is None:
+        raise RuntimeError(
+            "LLM unavailable — for Groq: set GROQ_API_KEY in .env; "
+            "for Ollama: run `ollama serve` and `ollama pull <model>`."
+        )
+
+    from .vectorstore import get_upload_vectorstore
+    vectorstore = get_upload_vectorstore(session_id, embedding_model)
+
+    retrieval_llm = gen_llm if use_multiquery else None
+
+    fetch_k = min(50, max(10, len(chunk_result.texts)))
+    bm25_retriever = build_bm25_retriever(chunk_result.lc_docs, fetch_k=fetch_k)
+    bm25_okapi     = build_bm25_okapi(chunk_result.texts)
+
+    retrieved = retrieve_and_rerank(
+        vectorstore=vectorstore,
+        bm25_retriever=bm25_retriever,
+        bm25_okapi=bm25_okapi,
+        chunk_result=chunk_result,
+        query=query,
+        reranker=reranker,
+        dataset_type="tabular",
+        fetch_k=fetch_k,
+        llm=retrieval_llm,
+        k=top_k,
+        rerank_top_n=min(20, fetch_k),
+    )
+
+    actual_model = model or (
+        OLLAMA_DEFAULT_MODEL if provider == "ollama" else GROQ_DEFAULT_MODEL
+    )
+
+    return generate_answer(
+        query=query,
+        retrieved=retrieved,
+        corpus_lookup=corpus_lookup,
+        llm=gen_llm,
+        top_k=top_k,
+        multiquery=retrieval_llm is not None,
+        model_name=actual_model,
+    )
